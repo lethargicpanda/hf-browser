@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 API = "https://huggingface.co/api"
 SORTS = ["downloads", "likes", "lastModified", "trendingScore"]
@@ -35,10 +35,12 @@ def fetch_json(url):
         return json.load(resp)
 
 
-def fetch_models(query, sort):
+def fetch_models(query, sort, text_only=False):
     params = {"limit": str(LIMIT), "sort": sort, "direction": "-1"}
     if query:
         params["search"] = query
+    if text_only:
+        params["pipeline_tag"] = "text-generation"
     url = f"{API}/models?{urllib.parse.urlencode(params)}"
     return fetch_json(url)
 
@@ -75,6 +77,8 @@ class App:
         self.selected = 0
         self.top = 0
         self.status = ""
+        self.text_only = False
+        self.deployments = {}
         curses.curs_set(0)
         curses.use_default_colors()
         curses.init_pair(1, curses.COLOR_YELLOW, -1)   # header
@@ -91,7 +95,7 @@ class App:
     def load(self):
         self.draw_list(loading=True)
         try:
-            self.models = fetch_models(self.query, self.sort)
+            self.models = fetch_models(self.query, self.sort, self.text_only)
             self.status = f"{len(self.models)} models"
         except Exception as e:
             self.models = []
@@ -108,7 +112,7 @@ class App:
         query = self.query or "(top models)"
         safe_addstr(self.scr, 0, 0, title, curses.color_pair(1) | curses.A_BOLD)
         safe_addstr(self.scr, 0, len(title) + 1,
-                    f"search: {query}   sort: {sort_label}", curses.color_pair(3))
+                    f"search: {query}   sort: {sort_label}   task: {'text-generation' if self.text_only else 'all'}", curses.color_pair(3))
         safe_addstr(self.scr, 1, 0, "─" * (w - 1))
 
     def draw_footer(self, keys):
@@ -146,7 +150,7 @@ class App:
                 safe_addstr(self.scr, y, 0, " " * (w - 1), line_attr)
             safe_addstr(self.scr, y, 1, m.get("id", "?"), line_attr | curses.A_BOLD)
             safe_addstr(self.scr, y, max(2, w - len(stats) - 2), stats, line_attr)
-        self.draw_footer("/:search  s:sort  enter:details  r:refresh  q:quit ")
+        self.draw_footer("/:search  s:sort  f:text filter  enter:details  r:refresh  q:quit ")
         self.scr.refresh()
 
     # ---------- search input ----------
@@ -196,7 +200,7 @@ class App:
                 text, attr = lines[i]
                 safe_addstr(self.scr, 2 + i - offset, 2, text, attr)
             self.status = model_id
-            self.draw_footer("j/k:scroll  o:open URL  q/esc:back ")
+            self.draw_footer("t:test  d:deploy  x:Space  j/k:scroll  o:URL  q:back ")
             self.scr.refresh()
             ch = self.scr.getch()
             if ch in (ord("q"), 27):
@@ -211,6 +215,9 @@ class App:
                 offset -= rows
             elif ch == ord("o"):
                 webbrowser.open(f"https://huggingface.co/{model_id}")
+            elif ch in (ord("t"), ord("d"), ord("x")):
+                from .testing_ui import handle_action
+                handle_action(self, d, {ord("t"): "test", ord("d"): "deploy", ord("x"): "space"}[ch])
 
     def detail_lines(self, d):
         bold = curses.A_BOLD
@@ -286,6 +293,9 @@ class App:
                 self.sort_idx = (self.sort_idx + 1) % len(SORTS)
                 self.load()
             elif ch == ord("r"):
+                self.load()
+            elif ch == ord("f"):
+                self.text_only = not self.text_only
                 self.load()
             elif ch in (curses.KEY_ENTER, 10, 13) and self.models:
                 self.show_detail(self.models[self.selected]["id"])
